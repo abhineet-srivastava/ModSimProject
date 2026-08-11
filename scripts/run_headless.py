@@ -7,6 +7,11 @@ scripts.run_headless` for the same behavior outside a container too.
 
 import os
 import sys
+from pathlib import Path
+
+# Allow running this file directly, not just as `python -m scripts.run_headless`
+# — see the matching comment in scripts/report.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from msim.export import render_html_viewer
 from msim.scenario import build_and_run, print_report

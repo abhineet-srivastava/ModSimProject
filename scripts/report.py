@@ -11,6 +11,15 @@ Usage:
 """
 
 import argparse
+import sys
+from pathlib import Path
+
+# Allow running this file directly (e.g. an IDE's "Run" button invokes
+# `python scripts/report.py`, which only puts scripts/ on sys.path, not
+# the project root) as well as the recommended `python -m scripts.report`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import psycopg2
 
 from msim import db
 
@@ -104,7 +113,19 @@ def main():
     parser.add_argument("--limit", type=int, default=10, help="How many runs to list in summary view (default 10)")
     args = parser.parse_args()
 
-    conn = db.get_connection()
+    try:
+        conn = db.get_connection()
+    except RuntimeError:
+        print("DATABASE_URL is not set.", file=sys.stderr)
+        print("Set it to point at a running Postgres, e.g.:", file=sys.stderr)
+        print('  export DATABASE_URL="postgresql://msim:msim@localhost:5432/msim"', file=sys.stderr)
+        print("(start one with: docker compose up postgres -d)", file=sys.stderr)
+        sys.exit(1)
+    except psycopg2.OperationalError as e:
+        print(f"Could not connect to the database: {e}", file=sys.stderr)
+        print("Is Postgres running? Start it with: docker compose up postgres -d", file=sys.stderr)
+        sys.exit(1)
+
     try:
         db.init_schema(conn)
         if args.latest:
