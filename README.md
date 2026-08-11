@@ -16,8 +16,9 @@ python main.py
 ```
 
 That runs the demo scenario (a 3-missile raid against a 2-launcher
-battery), prints a per-threat report, and opens an interactive 3D replay
-in your browser.
+battery), prints a per-threat report, opens an interactive 3D replay in
+your browser, and appends the run to CSV logbooks under `output/logbook/`
+— see [CSV logbook](#csv-logbook) below.
 
 ## Architecture
 
@@ -29,12 +30,45 @@ in your browser.
 | [`msim/simulation.py`](msim/simulation.py) | `Simulation` — the tick loop tying it together: sensor fusion → greedy weapon-target assignment → position updates → intercept/leak resolution, for arbitrarily many threats and interceptors at once. |
 | [`msim/units.py`](msim/units.py) | nm/knots ⇄ meters/m-per-s conversions. The public API (positions, speeds, ranges) is nautical miles and knots throughout; `Missile`'s internal physics stays SI since gravity is naturally expressed that way. |
 | [`msim/export.py`](msim/export.py) + [`msim/viewer_template.html`](msim/viewer_template.html) | Converts a run to JSON and renders it into a self-contained, dependency-free 3D viewer (hand-rolled perspective projection on `<canvas>`, no Three.js) with a live per-threat status board. |
-| [`msim/db.py`](msim/db.py) | Optional PostgreSQL/CockroachDB persistence for run history — see [Database](#database) below. |
+| [`msim/logbook.py`](msim/logbook.py) | Appends a completed run to the CSV logbooks — see below. |
 
 The engagement resolution logic (who gets tracked, who gets assigned an
 interceptor, what counts as a hit) is deliberately explicit rather than
 hidden in a framework — see [`Simulation.run()`](msim/simulation.py) for
-the actual per-tick sequencing.
+the actual per-tick sequencing. [`main.py`](main.py) is the only entry
+point: it defines the demo scenario, runs it, and delivers the output
+(viewer + logbook).
+
+## CSV logbook
+
+Every run of `python main.py` appends to three CSV files under
+`output/logbook/` (created on first run; `output/` is gitignored, so
+these are local-only history, not something you'd commit):
+
+- **`runs.csv`** — one row per run: intercept/leaker tally, scenario
+  parameters (`dt`, `t_max`, `intercept_radius_nm`, HVA position).
+- **`threats.csv`** — one row per threat per run: outcome, speed, launch
+  angle, launch/cue/detect/impact/intercept times, intercept point, which
+  interceptor (if any) engaged it.
+- **`sensors.csv`** — one row per sensor per run: type (radar/satellite),
+  position, detection range (blank/unlimited for satellites, since
+  they're not range-gated — see `SatelliteUnit` in
+  [`msim/blue_units.py`](msim/blue_units.py)).
+
+All three share a `run_timestamp` column (ISO-8601 UTC) so you can join
+them — e.g. in a spreadsheet, or with pandas:
+
+```python
+import pandas as pd
+runs = pd.read_csv("output/logbook/runs.csv")
+threats = pd.read_csv("output/logbook/threats.csv")
+threats.merge(runs, on="run_timestamp")
+```
+
+Run `main.py` a few times (it's deterministic — same scenario every time
+— so the numbers will repeat, but this is exactly what you'd build on if
+you started varying scenario parameters between runs) and open
+`output/logbook/threats.csv` in Excel/Sheets to see it accumulate.
 
 ## Testing
 
@@ -46,11 +80,9 @@ pytest tests/ -v --cov=msim
 The suite (52 tests) focuses on *physical correctness*, not just "does it
 run": e.g. `RedTEL.compute_launch_angle` is tested by actually propagating
 the resulting `Missile` and asserting it lands on the target, not by
-checking the angle against a hardcoded expected value. The database tests
-(`tests/test_db.py`) need a live Postgres and skip cleanly without one —
-point `DATABASE_URL` at one (e.g. `docker compose up postgres -d`) to run
-them locally; CI always runs them against a real Postgres service
-container.
+checking the angle against a hardcoded expected value. `tests/test_logbook.py`
+covers the CSV logbook (using pytest's `tmp_path` fixture, so tests never
+touch your real `output/logbook/`).
 
 ## Performance
 
@@ -68,44 +100,8 @@ python -m benchmarks.profile_engagement 40 25   # cProfile hotspot report
 python -m benchmarks.bench_c2_update             # reproducible before/after
 ```
 
-## Database
-
-Optional. Persists completed runs (per-threat outcomes, timing, telemetry
-summary — not the full per-tick trajectory history) to PostgreSQL or
-CockroachDB for later querying/analysis, separate from the real-time
-simulation itself. Schema: [`sql/schema.sql`](sql/schema.sql).
-
-```bash
-docker compose up postgres -d
-export DATABASE_URL=postgresql://msim:msim@localhost:5432/msim
-python main.py       # prints "Run persisted to database as runs.id=N"
-```
-
-`main.py`/`scripts/run_headless.py` only attempt persistence when
-`DATABASE_URL` is set — the simulation and viewer work identically without
-a database configured at all.
-
-## Docker
-
-```bash
-docker compose up --build
-```
-
-Runs the full stack: Postgres (with a healthcheck gating startup order)
-plus the app container, which runs the scenario headlessly (no browser in
-a container), writes the 3D viewer HTML to `./output/` on the host via a
-bind mount, and persists the run to the database. See
-[`scripts/run_headless.py`](scripts/run_headless.py) for the
-container-friendly entry point vs. [`main.py`](main.py)'s interactive one
-— they share the same scenario definition
-([`msim/scenario.py`](msim/scenario.py)) so there's exactly one place the
-demo engagement is actually defined.
-
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the test
-suite (against a real Postgres service container, so the DB tests aren't
-skipped in CI), a syntax check, the demo scenario end-to-end, the
-performance benchmark, and a separate job that builds and runs the full
-Docker Compose stack — so a broken container build fails CI the same way
-a broken test would.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs a syntax
+check, the full test suite with coverage, and the performance benchmark
+on every push/PR.
