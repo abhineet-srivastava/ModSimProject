@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Engagement Viewer — 3D</title>
+<style>
+  :root {
+    --void: #060a10;
+    --panel: rgba(13, 19, 27, 0.85);
+    --border: #24333f;
+    --border-bright: #3a4f5e;
+    --text: #d7e2ea;
+    --text-dim: #64798a;
+    --text-faint: #3d4d5a;
+    --red: #ff5252;
+    --blue: #4fc3ff;
+    --green: #35e08a;
+    --green-dim: #12492c;
+    --amber: #ffb020;
+    --grid-major: #29404f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--void);
+    color: var(--text);
+    font-family: ui-monospace, "JetBrains Mono", "SFMono-Regular", "Cascadia Mono", Consolas, Menlo, monospace;
+    overflow: hidden;
+  }
+
+  #stage { position: relative; width: 100vw; height: 100vh; }
+
+  canvas#world { position: absolute; inset: 0; display: block; cursor: grab; }
+  canvas#world.dragging { cursor: grabbing; }
+
+  .hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+
+  .panel {
+    pointer-events: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(6px);
+    padding: 11px 13px;
+    position: relative;
+  }
+  .panel::before {
+    content: ""; position: absolute; top: -1px; left: -1px; width: 10px; height: 10px;
+    border-top: 2px solid var(--border-bright); border-left: 2px solid var(--border-bright);
+  }
+  .panel::after {
+    content: ""; position: absolute; bottom: -1px; right: -1px; width: 10px; height: 10px;
+    border-bottom: 2px solid var(--border-bright); border-right: 2px solid var(--border-bright);
+  }
+
+  .eyebrow { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 4px; }
+  .title { font-size: 15px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text); margin: 0; }
+  .subtitle { font-size: 10.5px; color: var(--text-dim); margin-top: 4px; letter-spacing: 0.02em; }
+  .subtitle b { color: var(--text); font-weight: 600; }
+
+  #statusPanel { min-width: 190px; text-align: right; }
+  #clock { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); letter-spacing: 0.03em; }
+  #clock span { font-size: 12px; color: var(--text-dim); font-weight: 400; }
+  #tally { margin-top: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; }
+  #tally .n { color: var(--green); }
+  #tally .l { color: var(--red); }
+  #tally .p { color: var(--text-dim); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 7px; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+    font-weight: 700; border: 1px solid var(--text-faint); color: var(--text-dim); white-space: nowrap;
+  }
+  .pill .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .pill.standby { color: var(--text-dim); border-color: var(--text-faint); }
+  .pill.inbound { color: var(--text-dim); border-color: var(--text-faint); }
+  .pill.cued { color: var(--amber); border-color: var(--text-faint); opacity: 0.75; }
+  .pill.tracked { color: var(--amber); border-color: var(--amber); }
+  .pill.engaging { color: var(--amber); border-color: var(--amber); animation: pulse 1s infinite; }
+  .pill.intercept { color: var(--green); border-color: var(--green); box-shadow: 0 0 10px -2px var(--green); }
+  .pill.leaker { color: var(--red); border-color: var(--red); box-shadow: 0 0 10px -2px var(--red); }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+
+  /* track list */
+  #trackList { min-width: 268px; max-width: 300px; }
+  #trackList .thead {
+    display: flex; justify-content: space-between; font-size: 9.5px; color: var(--text-faint);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px;
+  }
+  .track-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 5px 0; border-top: 1px solid var(--border);
+  }
+  .track-row:first-of-type { border-top: none; }
+  .track-row .tr-name { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: var(--red); min-width: 52px; }
+  .track-row .sw { width: 7px; height: 7px; transform: rotate(45deg); background: var(--red); flex: none; }
+  .track-row .tr-data { font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; text-align: right; flex: 1; }
+  .track-row .tr-data b { color: var(--text); font-weight: 600; }
+  .track-row.dim { opacity: 0.4; }
+
+  #transport { pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 9px 15px; }
+  #playBtn {
+    width: 32px; height: 32px; border: 1px solid var(--border-bright); background: transparent; color: var(--text);
+    cursor: pointer; display: flex; align-items: center; justify-content: center; flex: none;
+  }
+  #playBtn:hover { border-color: var(--green); color: var(--green); }
+  #playBtn svg { width: 12px; height: 12px; }
+
+  #scrub { flex: 1; appearance: none; height: 2px; background: var(--grid-major); outline: none; }
+  #scrub::-webkit-slider-thumb {
+    appearance: none; width: 10px; height: 10px; background: var(--green); border: none; cursor: pointer;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+  #scrub::-moz-range-thumb {
+    width: 10px; height: 10px; background: var(--green); border: none; cursor: pointer;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+  #tlabel { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 72px; }
+
+  .segbtns { display: flex; gap: 2px; }
+  .segbtns button {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    font-family: inherit; font-size: 9.5px; letter-spacing: 0.07em; padding: 6px 8px; cursor: pointer;
+  }
+  .segbtns button:hover { color: var(--text); border-color: var(--border-bright); }
+  .segbtns button.active { color: var(--void); background: var(--green); border-color: var(--green); font-weight: 700; }
+
+  #legend { display: flex; flex-direction: column; gap: 5px; font-size: 9.5px; color: var(--text-dim); }
+  #legend .li { display: flex; align-items: center; gap: 6px; letter-spacing: 0.03em; }
+  #legend .mk { width: 8px; height: 8px; flex: none; }
+
+  #camHint { font-size: 9.5px; color: var(--text-faint); letter-spacing: 0.03em; text-align: right; }
+
+  ::selection { background: var(--green-dim); }
+  @media (prefers-reduced-motion: reduce) { .pill.engaging { animation: none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="world"></canvas>
+
+  <div class="hud">
+    <div class="row">
+      <div class="panel">
+        <p class="eyebrow">Simulated Engagement</p>
+        <h1 class="title">Missile Defense — 3D Viewer</h1>
+        <p class="subtitle" id="scenarioLine"></p>
+      </div>
+      <div class="panel" id="statusPanel">
+        <p class="eyebrow">Range Time</p>
+        <div id="clock">00.00<span> s</span></div>
+        <div id="tally"></div>
+      </div>
+    </div>
+
+    <div class="row" style="align-items: flex-start;">
+      <div class="panel" id="trackList">
+        <div class="thead"><span>Threat Track</span><span>Status</span></div>
+        <div id="trackRows"></div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:9px;">
+        <div id="legend" class="panel">
+          <div class="li"><span class="mk" style="background:var(--red);"></span><span>Threat missile</span></div>
+          <div class="li"><span class="mk" style="background:var(--blue);"></span><span>Interceptor</span></div>
+          <div class="li"><span class="mk" style="background:var(--amber);"></span><span>Radar / C2 / satellite</span></div>
+          <div class="li"><span class="mk" style="background:var(--blue);"></span><span>High-value asset</span></div>
+          <div class="li"><span class="mk" style="background:var(--green);"></span><span>Intercept / impact</span></div>
+        </div>
+        <div id="camHint" class="panel">DRAG TO ORBIT · SCROLL TO ZOOM</div>
+      </div>
+    </div>
+
+    <div class="row" style="align-items:center;">
+      <div class="panel" id="transport" style="flex:1;">
+        <button id="playBtn" aria-label="Play">
+          <svg viewBox="0 0 24 24" fill="currentColor" id="playIcon"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <span id="tlabel">T+00.00s</span>
+        <input type="range" id="scrub" min="0" max="1" step="1" value="0" />
+        <div class="segbtns" id="speedBtns">
+          <button data-speed="1">1×</button>
+          <button data-speed="4" class="active">4×</button>
+          <button data-speed="8">8×</button>
+          <button data-speed="16">16×</button>
+        </div>
+      </div>
+      <div class="panel segbtns" id="camBtns">
+        <button data-cam="orbit" class="active">ORBIT</button>
+        <button data-cam="profile">PROFILE</button>
+        <button data-cam="top">MAP</button>
+        <button data-cam="chase">CHASE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ENGAGEMENT = __ENGAGEMENT_DATA__;
+
+/* ---------------------------------------------------------------------
+   Scene setup
+--------------------------------------------------------------------- */
+const SCALE = 0.12; // nautical miles per world unit
+const toWorld = (nmx, nmy) => [nmx / SCALE, nmy / SCALE];
+const dt = ENGAGEMENT.dt;
+const frames = ENGAGEMENT.frames;
+const maxFrame = frames.length - 1;
+
+const reds = ENGAGEMENT.reds;
+const blues = ENGAGEMENT.blues;
+const bluesByName = Object.fromEntries(blues.map(b => [b.name, b]));
+const redsByName = Object.fromEntries(reds.map(r => [r.name, r]));
+
+/* Each red's launch site sits at its real lateral_offset (nm, from RedTEL
+   — how far to the side of the range axis it actually is), converted to
+   world units so lateral spread reads at true scale against range/altitude.
+   But every red is aimed at the same target, so its *trajectory* should
+   converge from that lateral offset at launch down to the target's lane
+   (usually 0, dead center) as it closes in — not stay parallel-shifted for
+   the whole flight, which would visually read as "flying to a different
+   place" even though the underlying range/altitude physics is unchanged.
+   redLaneAtX() interpolates that per-point. Blue interceptors don't have
+   their own lateral offset — once launched, an interceptor's lane tracks
+   whatever its assigned threat's lane is at that same moment, so they
+   visually converge at the real intercept point. */
+const laneOfRed = {};
+reds.forEach(r => { laneOfRed[r.name] = (r.lateral_offset || 0) / SCALE; });
+
+const redLaunchX = {}, redTargetX = {};
+reds.forEach(r => {
+  redLaunchX[r.name] = toWorld(r.position[0], r.position[1])[0];
+  const tgt = r.target || ENGAGEMENT.hva_pos;
+  redTargetX[r.name] = tgt ? toWorld(tgt[0], tgt[1])[0] : redLaunchX[r.name];
+});
+function redLaneAtX(name, worldX) {
+  const x0 = redLaunchX[name], x1 = redTargetX[name];
+  const lateral = laneOfRed[name] || 0;
+  if (x1 === x0) return lateral;
+  const frac = Math.min(1, Math.max(0, (worldX - x0) / (x1 - x0)));
+  return lateral * (1 - frac);
+}
+
+const assignedRedOfBlue = {};
+reds.forEach(r => { if (r.interceptor) assignedRedOfBlue[r.interceptor] = r.name; });
+function blueLaneAtFrame(blueName, frameIndex) {
+  const redName = assignedRedOfBlue[blueName];
+  if (!redName) return 0;
+  const rp = frames[frameIndex].reds[redName];
+  if (!rp) return 0;
+  return redLaneAtX(redName, rp[0] / SCALE);
+}
+
+const hasHva = ENGAGEMENT.hva_pos != null;
+const hvaSite = hasHva ? [...toWorld(ENGAGEMENT.hva_pos[0], ENGAGEMENT.hva_pos[1]), 0] : null;
+
+const hasC2 = ENGAGEMENT.c2_pos != null;
+const c2Site = hasC2 ? [...toWorld(ENGAGEMENT.c2_pos[0], ENGAGEMENT.c2_pos[1]), 0] : null;
+
+/* Radar/C2/blue battery all sit at their true position (lane 0) — the
+   sensor dome is centered exactly where they physically are, so blue TELs
+   render genuinely inside it rather than visually displaced from it. */
+const radars = ENGAGEMENT.radars.map(r => ({
+  ...r,
+  site: [...toWorld(r.position[0], r.position[1]), 0],
+  radiusWorld: r.detection_range / SCALE,
+}));
+const satellites = ENGAGEMENT.satellites.map((s, i) => ({
+  ...s,
+  site: [...toWorld(s.position[0], s.position[1]), 12 + i * 8],
+}));
+
+const redSites = reds.map(r => ({ ...r, site: [...toWorld(r.position[0], r.position[1]), laneOfRed[r.name]] }));
+const blueSites = blues.map(b => ({ ...b, site: [...toWorld(b.position[0], b.position[1]), 0] }));
+
+let minX = Infinity, maxX = -Infinity, maxY = 10, minZ = 0, maxZ = 0;
+function bound(x, y, z) {
+  minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+  maxY = Math.max(maxY, y);
+  minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+}
+redSites.forEach(r => bound(r.site[0], 0, r.site[2]));
+blueSites.forEach(b => bound(b.site[0], 0, b.site[2]));
+if (hasHva) bound(hvaSite[0], 0, hvaSite[2]);
+if (hasC2) bound(c2Site[0], 0, c2Site[2]);
+radars.forEach(r => { bound(r.site[0] - r.radiusWorld, r.radiusWorld, r.site[2]); bound(r.site[0] + r.radiusWorld, 0, r.site[2]); });
+satellites.forEach(s => bound(s.site[0], s.site[1], s.site[2]));
+frames.forEach((f, fi) => {
+  for (const name in f.reds) { const p = f.reds[name]; bound(p[0]/SCALE, p[1]/SCALE, redLaneAtX(name, p[0]/SCALE)); }
+  for (const name in f.blues) { const p = f.blues[name]; bound(p[0]/SCALE, p[1]/SCALE, blueLaneAtFrame(name, fi)); }
+});
+
+const padX = (maxX - minX) * 0.08 + 6;
+minX -= padX; maxX += padX;
+const sceneCenter = [(minX + maxX) / 2, maxY * 0.28, (minZ + maxZ) / 2];
+const sceneDiag = Math.hypot(maxX - minX, maxY, maxZ - minZ);
+
+/* ---------------------------------------------------------------------
+   Minimal 3D math (no libraries — hand-rolled perspective projection)
+--------------------------------------------------------------------- */
+const sub3 = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const dot3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross3 = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
+const norm3 = (a) => { const l = len3(a) || 1; return [a[0]/l, a[1]/l, a[2]/l]; };
+
+class Camera {
+  constructor(target) {
+    this.target = target.slice();
+    this.azimuth = 0.55;
+    this.elevation = 0.36;
+    this.radius = sceneDiag * 1.25;
+    this.fov = 52 * Math.PI / 180;
+    this._recompute();
+  }
+  _recompute() {
+    const { azimuth: a, elevation: e, radius: r, target: t } = this;
+    const eye = [
+      t[0] + r * Math.cos(e) * Math.sin(a),
+      t[1] + r * Math.sin(e),
+      t[2] + r * Math.cos(e) * Math.cos(a),
+    ];
+    const fwd = norm3(sub3(t, eye));
+    const worldUp = [0, 1, 0];
+    let right = cross3(fwd, worldUp);
+    if (len3(right) < 1e-5) right = [1, 0, 0];
+    right = norm3(right);
+    const up = norm3(cross3(right, fwd));
+    this.eye = eye; this.fwd = fwd; this.right = right; this.up = up;
+  }
+  setSpherical(azimuth, elevation, radius, target) {
+    this.azimuth = azimuth; this.elevation = elevation; this.radius = radius;
+    if (target) this.target = target.slice();
+    this._recompute();
+  }
+  project(p, w, h) {
+    const rel = sub3(p, this.eye);
+    const cz = dot3(rel, this.fwd);
+    if (cz < 0.15) return null;
+    const cx = dot3(rel, this.right);
+    const cy = dot3(rel, this.up);
+    const f = (h / 2) / Math.tan(this.fov / 2);
+    const scale = f / cz;
+    return { x: w/2 + cx*scale, y: h/2 - cy*scale, depth: cz, scale };
+  }
+}
+
+const camera = new Camera(sceneCenter);
+const PRESETS = {
+  orbit:   { az: 0.55, el: 0.36, r: sceneDiag * 1.25 },
+  profile: { az: Math.PI/2, el: 0.14, r: sceneDiag * 1.5 },
+  top:     { az: 0.55, el: 1.45, r: sceneDiag * 1.5 },
+  chase:   { az: -0.3, el: 0.12, r: sceneDiag * 0.8 },
+};
+
+/* ---------------------------------------------------------------------
+   Canvas / render loop
+--------------------------------------------------------------------- */
+const canvas = document.getElementById('world');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#050810'); g.addColorStop(0.55, '#0a121c'); g.addColorStop(1, '#10202b');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.globalAlpha = 0.5;
+  for (let i = 0; i < 110; i++) {
+    const x = (i * 137.5) % W, y = (i * 91.3) % (H * 0.55);
+    ctx.fillStyle = i % 5 === 0 ? '#3a4f5e' : '#1c2833';
+    ctx.fillRect(x, y, 1, 1);
+  }
+  ctx.restore();
+}
+
+function project(p) { return camera.project(p, W, H); }
+
+function drawGround() {
+  const step = 5;
+  const nx0 = Math.floor(minX / step) - 2, nx1 = Math.ceil(maxX / step) + 2;
+  const zHalf = Math.max(30, sceneDiag * 0.4);
+  const nz0 = Math.floor(-zHalf / step), nz1 = Math.ceil(zHalf / step);
+  ctx.lineWidth = 1;
+  for (let i = nx0; i <= nx1; i++) {
+    const x = i * step;
+    const a = project([x, 0, nz0 * step]), b = project([x, 0, nz1 * step]);
+    if (!a || !b) continue;
+    ctx.strokeStyle = (i % 4 === 0) ? '#29404f' : '#1c2833';
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  for (let j = nz0; j <= nz1; j++) {
+    const z = j * step;
+    const a = project([nx0 * step, 0, z]), b = project([nx1 * step, 0, z]);
+    if (!a || !b) continue;
+    ctx.strokeStyle = (j === 0) ? '#3a4f5e' : (j % 4 === 0 ? '#29404f' : '#1c2833');
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+}
+
+function markerAt(x, color, label, z = 0, height = 3.2) {
+  const base = project([x, 0, z]);
+  const tip = project([x, height, z]);
+  if (!base || !tip) return;
+  ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(base.x, base.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+  ctx.beginPath(); ctx.arc(base.x, base.y, 4.5, 0, Math.PI*2); ctx.fillStyle = color; ctx.fill();
+  ctx.save();
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.5; ctx.lineWidth = 1;
+  const rpx = 9 + 4 * Math.sin(performance.now()/500);
+  ctx.beginPath(); ctx.ellipse(base.x, base.y, rpx, rpx*0.35, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = color; ctx.font = '600 10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, tip.x, tip.y - 8);
+}
+
+function hvaMarkerAt(x, color, label, z = 0) {
+  const base = project([x, 0, z]);
+  const tip = project([x, 2.6, z]);
+  if (!base || !tip) return;
+  ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(base.x, base.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+  const s = 6;
+  ctx.fillStyle = color;
+  ctx.fillRect(base.x - s / 2, base.y - s / 2, s, s);
+  ctx.save();
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.4; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(base.x, base.y, 11, 11 * 0.35, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(base.x, base.y, 16, 16 * 0.35, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = color; ctx.font = '600 10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, tip.x, tip.y - 8);
+}
+
+/* satellite: a small hull + solar-panel glyph high above the theater,
+   with a faint dashed downlink to whatever it's currently tracking */
+function satelliteMarkerAt(sat, t) {
+  const p = project(sat.site);
+  if (!p) return;
+  const bob = Math.sin(performance.now() / 900 + sat.site[0]) * 3;
+  const y = p.y + bob;
+  ctx.save();
+  ctx.strokeStyle = '#ffb020'; ctx.fillStyle = '#ffb020'; ctx.lineWidth = 1.4;
+  ctx.fillRect(p.x - 3, y - 3, 6, 6);
+  ctx.beginPath(); ctx.moveTo(p.x - 10, y); ctx.lineTo(p.x - 4, y); ctx.moveTo(p.x + 4, y); ctx.lineTo(p.x + 10, y); ctx.stroke();
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath(); ctx.arc(p.x, y, 13, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.font = '600 10px ui-monospace, monospace'; ctx.textAlign = 'center';
+  ctx.fillText(sat.name, p.x, y - 18);
+  ctx.restore();
+
+  for (const red of reds) {
+    if (red.cue_time == null || t < red.cue_time) continue;
+    if (red.outcome === 'INTERCEPT' && t >= red.intercept_time) continue;
+    if (red.outcome === 'LEAKER' && t >= red.impact_time) continue;
+    const rf = frames[frameIdx].reds[red.name];
+    if (!rf) continue;
+    const rp = project([rf[0]/SCALE, rf[1]/SCALE, redLaneAtX(red.name, rf[0]/SCALE)]);
+    if (!rp) continue;
+    ctx.save();
+    ctx.setLineDash([2, 5]);
+    ctx.strokeStyle = '#ffb020'; ctx.globalAlpha = 0.25; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(p.x, y); ctx.lineTo(rp.x, rp.y); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawRadarDome(center, radiusWorld, active) {
+  if (!radiusWorld) return;
+  const LAT_RINGS = 4, LON_ARCS = 10, SEG = 48;
+  const baseAlpha = active ? 0.6 : 0.2;
+  for (let i = 1; i <= LAT_RINGS; i++) {
+    const phi = (Math.PI / 2) * (i / LAT_RINGS);
+    let started = false;
+    ctx.beginPath();
+    for (let s = 0; s <= SEG; s++) {
+      const theta = (s / SEG) * Math.PI * 2;
+      const p = [center[0] + radiusWorld * Math.sin(phi) * Math.cos(theta),
+                 center[1] + radiusWorld * Math.cos(phi),
+                 center[2] + radiusWorld * Math.sin(phi) * Math.sin(theta)];
+      const proj = project(p);
+      if (!proj) { started = false; continue; }
+      if (!started) { ctx.moveTo(proj.x, proj.y); started = true; } else ctx.lineTo(proj.x, proj.y);
+    }
+    ctx.strokeStyle = '#ffb020';
+    ctx.globalAlpha = baseAlpha * (i === LAT_RINGS ? 1 : 0.55);
+    ctx.lineWidth = i === LAT_RINGS ? 1.4 : 1;
+    ctx.stroke();
+  }
+  for (let j = 0; j < LON_ARCS; j++) {
+    const theta = (j / LON_ARCS) * Math.PI * 2;
+    let started = false;
+    ctx.beginPath();
+    for (let s = 0; s <= SEG / 2; s++) {
+      const phi = (s / (SEG / 2)) * (Math.PI / 2);
+      const p = [center[0] + radiusWorld * Math.sin(phi) * Math.cos(theta),
+                 center[1] + radiusWorld * Math.cos(phi),
+                 center[2] + radiusWorld * Math.sin(phi) * Math.sin(theta)];
+      const proj = project(p);
+      if (!proj) { started = false; continue; }
+      if (!started) { ctx.moveTo(proj.x, proj.y); started = true; } else ctx.lineTo(proj.x, proj.y);
+    }
+    ctx.strokeStyle = '#ffb020'; ctx.globalAlpha = baseAlpha * 0.45; ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function inRadarRange(radar, name) {
+  const p = frames[frameIdx].reds[name];
+  if (!p) return false;
+  return Math.hypot(p[0]-radar.position[0], p[1]-radar.position[1]) <= radar.detection_range;
+}
+
+function diamond(x, y, r, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y-r); ctx.lineTo(x+r, y); ctx.lineTo(x, y+r); ctx.lineTo(x-r, y);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawTrail(points, upto, color) {
+  if (upto < 1) return;
+  for (let i = 1; i <= upto; i++) {
+    const p0 = points[i-1], p1 = points[i];
+    if (!p0 || !p1) continue;
+    const a0 = project(p0), a1 = project(p1);
+    if (!a0 || !a1) continue;
+    const alpha = 0.1 + 0.7 * (i / upto);
+    ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(a0.x, a0.y); ctx.lineTo(a1.x, a1.y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* a converging diagonal from launch (fromX, fromZ) to target (toX, toZ) —
+   not a flat line, since the threat's own lane collapses toward the
+   target's lane as it flies (see redLaneAtX) */
+function drawAimLine(fromX, fromZ, toX, toZ, color) {
+  const a = project([fromX, 0.05, fromZ]), b = project([toX, 0.05, toZ]);
+  if (!a || !b) return;
+  ctx.save();
+  ctx.setLineDash([4, 6]);
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.28; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.restore();
+}
+
+let bursts = [];
+function spawnBurst(pos, color) { bursts.push({ pos, start: performance.now(), color }); }
+function drawBursts() {
+  bursts = bursts.filter(b => (performance.now() - b.start) / 900 <= 1);
+  for (const burst of bursts) {
+    const t = (performance.now() - burst.start) / 900;
+    const p = project(burst.pos);
+    if (!p) continue;
+    const n = 14;
+    ctx.save();
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2;
+      const rad = 4 + t * 46 * p.scale * 0.02 * 60;
+      const x = p.x + Math.cos(ang) * rad, y = p.y + Math.sin(ang) * rad * 0.6;
+      ctx.globalAlpha = Math.max(0, 1 - t);
+      ctx.fillStyle = burst.color;
+      ctx.beginPath(); ctx.arc(x, y, 2.2, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha = Math.max(0, (1-t)) * 0.5;
+    ctx.strokeStyle = burst.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 6 + t*40, 0, Math.PI*2); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Playback state
+--------------------------------------------------------------------- */
+let frameIdx = 0;
+let playing = false;
+let speed = 4;
+let lastTs = null;
+let simTime = 0;
+const burstFiredFor = new Set();
+
+const scrub = document.getElementById('scrub');
+scrub.max = maxFrame;
+
+function findFrameIndex(t) {
+  let idx = Math.round(t / dt);
+  return Math.max(0, Math.min(maxFrame, idx));
+}
+
+function fmtNum(v, d=0) { return v == null ? '—' : v.toLocaleString(undefined, {minimumFractionDigits:d, maximumFractionDigits:d}); }
+
+function redStateAt(red, t) {
+  if (t < red.launch_time) return { cls: 'standby', text: 'STANDBY' };
+  if (red.outcome === 'INTERCEPT' && t >= red.intercept_time) return { cls: 'intercept', text: 'INTERCEPT' };
+  if (red.outcome === 'LEAKER' && t >= red.impact_time) return { cls: 'leaker', text: 'LEAKER' };
+  if (red.cue_time == null || t < red.cue_time) return { cls: 'inbound', text: 'INBOUND' };
+  if (red.detect_time == null || t < red.detect_time) return { cls: 'cued', text: 'CUED' };
+  const blue = red.interceptor ? bluesByName[red.interceptor] : null;
+  if (blue && blue.launch_time != null && t >= blue.launch_time) return { cls: 'engaging', text: 'ENGAGING' };
+  return { cls: 'tracked', text: 'TRACKED' };
+}
+
+function updateHud() {
+  const f = frames[frameIdx];
+  document.getElementById('clock').innerHTML = f.t.toFixed(1) + '<span> s</span>';
+  document.getElementById('tlabel').textContent = 'T+' + f.t.toFixed(1) + 's';
+  scrub.value = frameIdx;
+
+  let intercepted = 0, leaked = 0, pending = 0;
+  const rows = reds.map(red => {
+    const st = redStateAt(red, f.t);
+    if (st.cls === 'intercept') intercepted++;
+    else if (st.cls === 'leaker') leaked++;
+    else pending++;
+    const pos = f.reds[red.name];
+    const alt = pos ? fmtNum(pos[1], 1) + ' nm' : '—';
+    const rng = pos ? fmtNum(pos[0], 1) + ' nm' : '—';
+    return `<div class="track-row${pos ? '' : ' dim'}">
+      <span class="tr-name"><span class="sw"></span>${red.name}</span>
+      <span class="tr-data">ALT <b>${alt}</b> &nbsp; RNG <b>${rng}</b></span>
+      <span class="pill ${st.cls}"><span class="dot"></span>${st.text}</span>
+    </div>`;
+  }).join('');
+  document.getElementById('trackRows').innerHTML = rows;
+  document.getElementById('tally').innerHTML =
+    `<span class="n">${intercepted} INT</span> &nbsp;/&nbsp; <span class="l">${leaked} LEAK</span> &nbsp;/&nbsp; <span class="p">${pending} ACTIVE</span>`;
+
+  for (const red of reds) {
+    const st = redStateAt(red, f.t);
+    const key = red.name;
+    if ((st.cls === 'intercept' || st.cls === 'leaker') && !burstFiredFor.has(key)) {
+      burstFiredFor.add(key);
+      if (st.cls === 'intercept' && red.intercept_point) {
+        const wx = red.intercept_point[0]/SCALE;
+        spawnBurst([wx, red.intercept_point[1]/SCALE, redLaneAtX(red.name, wx)], '#35e08a');
+      } else if (st.cls === 'leaker') {
+        const lastPos = f.reds[red.name] || red.position;
+        const wx = lastPos[0]/SCALE;
+        spawnBurst([wx, 0.05, redLaneAtX(red.name, wx)], '#ff5252');
+      }
+    }
+    if (st.cls === 'standby' || st.cls === 'inbound' || st.cls === 'tracked' || st.cls === 'engaging') {
+      burstFiredFor.delete(key);
+    }
+  }
+}
+
+function render() {
+  drawSky();
+  drawGround();
+  const f = frames[frameIdx];
+
+  if (hasHva) {
+    redSites.forEach(r => drawAimLine(r.site[0], laneOfRed[r.name], redTargetX[r.name], 0, '#ff5252'));
+  }
+
+  radars.forEach(r => {
+    const active = reds.some(red => inRadarRange(r, red.name));
+    drawRadarDome(r.site, r.radiusWorld, active);
+    markerAt(r.site[0], '#ffb020', r.name, r.site[2]);
+  });
+  satellites.forEach(s => satelliteMarkerAt(s, f.t));
+  if (hasHva) hvaMarkerAt(hvaSite[0], '#4fc3ff', 'HVA-1', hvaSite[2]);
+  if (hasC2) markerAt(c2Site[0], '#ffb020', 'C2-ALPHA', c2Site[2]);
+  redSites.forEach(r => markerAt(r.site[0], '#ff5252', r.name, r.site[2]));
+  blueSites.forEach(b => markerAt(b.site[0], '#4fc3ff', b.name, b.site[2]));
+
+  for (const red of reds) {
+    const pts = frames.map(fr => {
+      const p = fr.reds[red.name];
+      return p ? [p[0]/SCALE, p[1]/SCALE, redLaneAtX(red.name, p[0]/SCALE)] : null;
+    });
+    drawTrail(pts, frameIdx, '#ff5252');
+    const p = f.reds[red.name];
+    if (p) {
+      const proj = project([p[0]/SCALE, p[1]/SCALE, redLaneAtX(red.name, p[0]/SCALE)]);
+      if (proj) diamond(proj.x, proj.y, 5, '#ff5252');
+    }
+  }
+  for (const blue of blues) {
+    const pts = frames.map((fr, fi) => {
+      const p = fr.blues[blue.name];
+      return p ? [p[0]/SCALE, p[1]/SCALE, blueLaneAtFrame(blue.name, fi)] : null;
+    });
+    drawTrail(pts, frameIdx, '#4fc3ff');
+    const p = f.blues[blue.name];
+    if (p) {
+      const proj = project([p[0]/SCALE, p[1]/SCALE, blueLaneAtFrame(blue.name, frameIdx)]);
+      if (proj) diamond(proj.x, proj.y, 5, '#4fc3ff');
+    }
+  }
+
+  drawBursts();
+}
+
+/* ---------------------------------------------------------------------
+   Animation / input
+--------------------------------------------------------------------- */
+function tick(ts) {
+  if (lastTs == null) lastTs = ts;
+  const delta = (ts - lastTs) / 1000;
+  lastTs = ts;
+
+  if (playing) {
+    simTime += delta * speed;
+    if (simTime >= frames[maxFrame].t) { simTime = frames[maxFrame].t; playing = false; setPlayIcon(false); }
+    frameIdx = findFrameIndex(simTime);
+  }
+
+  updateHud();
+  render();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+function setPlayIcon(isPlaying) {
+  document.getElementById('playIcon').innerHTML = isPlaying
+    ? '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>'
+    : '<path d="M8 5v14l11-7z"/>';
+}
+
+document.getElementById('playBtn').addEventListener('click', () => {
+  if (frameIdx === maxFrame && !playing) { simTime = 0; frameIdx = 0; burstFiredFor.clear(); }
+  playing = !playing; lastTs = null; setPlayIcon(playing);
+});
+
+scrub.addEventListener('input', () => {
+  playing = false; setPlayIcon(false);
+  frameIdx = parseInt(scrub.value, 10);
+  simTime = frames[frameIdx].t;
+});
+
+document.querySelectorAll('#speedBtns button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#speedBtns button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    speed = parseFloat(btn.dataset.speed);
+  });
+});
+
+let camAnim = null;
+document.querySelectorAll('#camBtns button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#camBtns button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const p = PRESETS[btn.dataset.cam];
+    const from = { az: camera.azimuth, el: camera.elevation, r: camera.radius };
+    const start = performance.now(), dur = 650;
+    if (camAnim) cancelAnimationFrame(camAnim);
+    function step(ts) {
+      const t = Math.min(1, (ts - start) / dur);
+      const e = 1 - Math.pow(1 - t, 3);
+      camera.setSpherical(from.az + (p.az - from.az) * e, from.el + (p.el - from.el) * e, from.r + (p.r - from.r) * e);
+      if (t < 1) camAnim = requestAnimationFrame(step);
+    }
+    camAnim = requestAnimationFrame(step);
+  });
+});
+
+let dragging = false, lastX = 0, lastY = 0;
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  canvas.classList.add('dragging'); canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  const az = camera.azimuth - dx * 0.005;
+  const el = Math.max(-1.4, Math.min(1.5, camera.elevation + dy * 0.005));
+  camera.setSpherical(az, el, camera.radius);
+});
+window.addEventListener('pointerup', () => { dragging = false; canvas.classList.remove('dragging'); });
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const r = Math.max(sceneDiag * 0.2, Math.min(sceneDiag * 3.5, camera.radius * (1 + e.deltaY * 0.001)));
+  camera.setSpherical(camera.azimuth, camera.elevation, r);
+}, { passive: false });
+
+const radarCount = radars.length, satCount = satellites.length;
+document.getElementById('scenarioLine').innerHTML =
+  `<b>${reds.length}</b> inbound &nbsp;·&nbsp; <b>${blues.length}</b> interceptor(s)` +
+  (radarCount ? ` &nbsp;·&nbsp; ${radarCount} radar` : '') +
+  (satCount ? ` &nbsp;·&nbsp; ${satCount} satellite` : '') +
+  (hasHva ? ` &nbsp;·&nbsp; defending <b>HVA-1</b>` : '');
+
+updateHud();
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: msim
+          POSTGRES_USER: msim
+          POSTGRES_PASSWORD: msim
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U msim -d msim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://msim:msim@localhost:5432/msim
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (syntax/undefined-name check)
+        run: python -m py_compile main.py msim/*.py scripts/*.py benchmarks/*.py
+
+      - name: Run tests (including live-Postgres DB tests)
+        run: python -m pytest tests/ -v --cov=msim --cov-report=term-missing
+
+      - name: Run the demo scenario end-to-end
+        run: python -m scripts.run_headless
+
+      - name: Run the performance benchmark
+        run: python -m benchmarks.bench_c2_update
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t msim:ci .
+
+      - name: Run full stack via docker compose
+        run: |
+          docker compose up --build --abort-on-container-exit --exit-code-from app
