@@ -118,7 +118,8 @@ def main():
     except RuntimeError:
         print("DATABASE_URL is not set.", file=sys.stderr)
         print("Set it to point at a running Postgres, e.g.:", file=sys.stderr)
-        print('  export DATABASE_URL="postgresql://msim:msim@localhost:5432/msim"', file=sys.stderr)
+        print('  PowerShell:  $env:DATABASE_URL = "postgresql://msim:msim@localhost:5432/msim"', file=sys.stderr)
+        print('  bash:        export DATABASE_URL="postgresql://msim:msim@localhost:5432/msim"', file=sys.stderr)
         print("(start one with: docker compose up postgres -d)", file=sys.stderr)
         sys.exit(1)
     except psycopg2.OperationalError as e:
