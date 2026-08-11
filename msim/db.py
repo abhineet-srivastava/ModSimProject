@@ -108,6 +108,22 @@ def save_run(conn, sim):
                 (run_id, blue.name, _f(blue.position[0]), _f(blue.position[1]), _f(blue.speed), _f(launch_time)),
             )
 
+        for sensor in sim.c2.sensors:
+            detection_range = getattr(sensor, "detection_range", None)  # None for satellites
+            cur.execute(
+                """
+                INSERT INTO sensors (run_id, name, sensor_type, fire_control_quality,
+                                      position_x_nm, position_y_nm, detection_range_nm)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    run_id, sensor.name,
+                    "radar" if sensor.fire_control_quality else "satellite",
+                    sensor.fire_control_quality,
+                    _f(sensor.position[0]), _f(sensor.position[1]), _f(detection_range),
+                ),
+            )
+
     conn.commit()
     return run_id
 
@@ -128,7 +144,7 @@ def fetch_recent_runs(conn, limit=10):
 
 
 def fetch_run_detail(conn, run_id):
-    """A run's summary row plus all of its threats and interceptors."""
+    """A run's summary row plus all of its threats, interceptors, and sensors."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT * FROM runs WHERE id = %s", (run_id,))
         run = cur.fetchone()
@@ -141,4 +157,7 @@ def fetch_run_detail(conn, run_id):
         cur.execute("SELECT * FROM interceptors WHERE run_id = %s ORDER BY id", (run_id,))
         interceptors = cur.fetchall()
 
-    return {"run": run, "threats": threats, "interceptors": interceptors}
+        cur.execute("SELECT * FROM sensors WHERE run_id = %s ORDER BY id", (run_id,))
+        sensors = cur.fetchall()
+
+    return {"run": run, "threats": threats, "interceptors": interceptors, "sensors": sensors}

@@ -11,7 +11,7 @@ import pytest
 
 psycopg2 = pytest.importorskip("psycopg2")
 
-from msim import db  # noqa: E402  (import after importorskip is intentional)
+from msim import RedTEL, Simulation, db  # noqa: E402  (import after importorskip is intentional)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL not set")
@@ -60,6 +60,25 @@ def test_save_and_fetch_run_detail(conn, easy_intercept_sim):
     assert detail["threats"][0]["interceptor_name"] == "BLUE-TEST"
     assert len(detail["interceptors"]) == 1
     assert detail["interceptors"][0]["name"] == "BLUE-TEST"
+    assert len(detail["sensors"]) == 1
+    assert detail["sensors"][0]["name"] == "RADAR-TEST"
+    assert detail["sensors"][0]["sensor_type"] == "radar"
+    assert detail["sensors"][0]["fire_control_quality"] is True
+    assert detail["sensors"][0]["detection_range_nm"] == pytest.approx(15.0)
+
+
+def test_satellite_sensor_persists_with_null_detection_range(conn, hva, c2_with_satellite):
+    red = RedTEL("RED-TEST", position=(0.0, 0.0), speed=1500.0)
+    sim = Simulation([red], [], c2_with_satellite, dt=0.1, t_max=200.0, intercept_radius=1.0, hva=hva)
+    sim.run(lofted=False)
+    run_id = conn.save(sim)
+
+    detail = db.fetch_run_detail(conn.connection, run_id)
+    sensors_by_name = {s["name"]: s for s in detail["sensors"]}
+    assert sensors_by_name["RADAR-TEST"]["detection_range_nm"] == pytest.approx(15.0)
+    assert sensors_by_name["SAT-TEST"]["sensor_type"] == "satellite"
+    assert sensors_by_name["SAT-TEST"]["fire_control_quality"] is False
+    assert sensors_by_name["SAT-TEST"]["detection_range_nm"] is None
 
 
 def test_fetch_run_detail_missing_run_returns_none(conn):

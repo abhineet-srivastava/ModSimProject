@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS interceptors (
     launch_time_s       DOUBLE PRECISION
 );
 
+CREATE TABLE IF NOT EXISTS sensors (
+    id                  BIGSERIAL PRIMARY KEY,
+    run_id              BIGINT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    sensor_type         TEXT NOT NULL,  -- 'radar' or 'satellite'
+    fire_control_quality BOOLEAN NOT NULL,
+    position_x_nm       DOUBLE PRECISION NOT NULL,
+    position_y_nm       DOUBLE PRECISION NOT NULL,
+    detection_range_nm  DOUBLE PRECISION  -- NULL for satellites: not range-gated
+);
+
 CREATE INDEX IF NOT EXISTS idx_threats_run_id ON threats(run_id);
 CREATE INDEX IF NOT EXISTS idx_interceptors_run_id ON interceptors(run_id);
+CREATE INDEX IF NOT EXISTS idx_sensors_run_id ON sensors(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at DESC);
